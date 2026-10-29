@@ -43,8 +43,11 @@ namespace StardewMCPBridge
         /// </summary>
         public void Start(IEnumerable<Point> waypoints)
         {
+            var newRoute = waypoints?.ToList() ?? new List<Point>();
             this.route.Clear();
-            this.route.AddRange(waypoints);
+            this.route.AddRange(newRoute);
+            if (newRoute.Count > 0)
+                this.BlockedTile = null;
         }
 
         public void Cancel()
@@ -68,28 +71,38 @@ namespace StardewMCPBridge
             var toTarget = target - position;
             float distance = toTarget.Length();
 
+            Vector2 next;
+            if (distance < 4f)
+            {
+                next = target;
+            }
+            else
+            {
+                // Time-normalised so SMAPI's variable timestep doesn't change pace.
+                float step = PixelsPerSecond * (float)time.ElapsedGameTime.TotalSeconds;
+                if (step > distance) step = distance;
+                next = position + toTarget / distance * step;
+            }
+
+            // Check the full tile-sized collision box, including the final waypoint.
+            // isTilePassable() only checks map layers and misses terrain features and
+            // objects; use the same collision query as the job runner's standability
+            // check so a newly blocked route reports the actual tile to its caller.
+            var center = new Point((int)(next.X / 64f), (int)(next.Y / 64f));
+            var bounds = new Rectangle(center.X * 64 + 1, center.Y * 64 + 1, 62, 62);
+            if (location.isCollidingPosition(
+                bounds, Game1.viewport, false, 0, glider: false, this.npc, pathfinding: true))
+            {
+                this.BlockedTile = new Vector2(center.X, center.Y);
+                this.route.Clear();
+                return false;
+            }
+
             if (distance < 4f)
             {
                 this.route.RemoveAt(0);
                 this.npc.Position = target;
                 return this.route.Count > 0;
-            }
-
-            // Time-normalised so SMAPI's variable timestep doesn't change pace.
-            float step = PixelsPerSecond * (float)time.ElapsedGameTime.TotalSeconds;
-            if (step > distance) step = distance;
-
-            var next = position + toTarget / distance * step;
-            // Respect walls: A* routes through passable tiles, but a newly spawned
-            // object (or another character) can appear mid-route. Drop the route rather
-            // than phase through; the caller's stall detection handles the rest.
-            var center = new Point((int)(next.X / 64f), (int)(next.Y / 64f));
-            if (!location.isTilePassable(new xTile.Dimensions.Location(center.X, center.Y), Game1.viewport)
-                && center != waypoint)
-            {
-                this.BlockedTile = new Vector2(center.X, center.Y);
-                this.route.Clear();
-                return false;
             }
 
             this.npc.Position = next;

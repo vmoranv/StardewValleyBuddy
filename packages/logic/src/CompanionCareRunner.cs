@@ -24,6 +24,7 @@ namespace StardewMCPBridge
         private readonly CompanionFarmer companion;
         private readonly IMonitor monitor;
         private int ticks;
+        private object lastSnapshot;
 
         public CareState Current { get; private set; }
 
@@ -33,17 +34,25 @@ namespace StardewMCPBridge
             this.monitor = monitor;
         }
 
-        public CareState Start(CareTask task, string buildingName = null, string chestTile = null, string itemFilter = null)
+        public CareState Start(CareTask task, string buildingName = null, string chestTile = null, string itemFilter = null,
+            string locationName = null, IEnumerable<Vector2> tiles = null)
         {
             // A care task replaces a tile task: a companion can't be in two places.
+            if (this.Current != null)
+                this.Cancel("replaced by new care task");
+            this.companion.Visual.controller = null;
             this.Current = new CareState
             {
                 Id = $"{task.ToString().ToLowerInvariant()}-{DateTime.UtcNow.Ticks}",
                 Task = task,
+                LocationName = string.IsNullOrWhiteSpace(locationName)
+                    ? this.companion.Visual.currentLocation?.Name : locationName,
                 BuildingName = buildingName,
                 ChestTile = chestTile,
                 ItemFilter = itemFilter,
             };
+            if (tiles != null)
+                this.Current.Tiles.AddRange(tiles.Distinct().Take(WorkLimits.MaxTiles));
             this.ticks = 0;
 
             this.monitor.Log($"{this.companion.Name}: care task {this.Current.Id} started", LogLevel.Info);
@@ -54,7 +63,10 @@ namespace StardewMCPBridge
         {
             if (this.Current == null) return;
             this.Current.AbortReason = reason;
+            this.Current.LastResult = reason;
             this.Current.Finished = true;
+            this.lastSnapshot = this.MakeSnapshot(this.Current, active: false);
+            this.Current = null;
         }
 
         /// <summary>Returns true while the task is still running.</summary>
@@ -62,7 +74,12 @@ namespace StardewMCPBridge
         {
             var task = this.Current;
             if (task == null) return false;
-            if (task.Finished || task.AbortReason != null) { this.Current = null; return false; }
+            if (task.Finished || task.AbortReason != null)
+            {
+                this.lastSnapshot = this.MakeSnapshot(task, active: false);
+                this.Current = null;
+                return false;
+            }
 
             this.companion.SyncFromNpc();
             this.ticks++;
@@ -87,6 +104,7 @@ namespace StardewMCPBridge
 
             task.Finished = true;
             this.monitor.Log($"{this.companion.Name}: care task {task.Id} done — {task.LastResult}", LogLevel.Info);
+            this.lastSnapshot = this.MakeSnapshot(task, active: false);
             this.Current = null;
             return false;
         }
@@ -314,22 +332,49 @@ namespace StardewMCPBridge
         /// <summary>
         /// Read every tile in a region — objects, terrain features, crops. This is the
         /// ground truth of what the player sees, as an agent-callable API.
-        /// Region arrives via ChestTile "x1,y1" + ItemFilter "x2,y2" (field reuse).
+        /// The location and coordinates are provided explicitly so the scan matches the
+        /// requested map region rather than whichever map the companion currently occupies.
         /// </summary>
         private void ScanTiles(CareState task)
         {
-            var location = this.companion.Visual.currentLocation;
+            var location = string.IsNullOrWhiteSpace(task.LocationName)
+                ? this.companion.Visual.currentLocation
+                : Game1.getLocationFromName(task.LocationName);
             if (location == null) { task.LastResult = "no location"; return; }
-            if (!TryParseTile(task.ChestTile, out var c1)) { task.LastResult = "region start required as \"x1,y1\" in chest field"; return; }
-            if (!TryParseTile(task.ItemFilter, out var c2)) { task.LastResult = "region end required as \"x2,y2\" in filter field"; return; }
-
-            int x1 = (int)c1.X, y1 = (int)c1.Y, x2 = (int)c2.X, y2 = (int)c2.Y;
             var tiles = new List<object>();
-
-            for (int y = Math.Min(y1, y2); y <= Math.Max(y1, y2); y++)
-            for (int x = Math.Min(x1, x2); x <= Math.Max(x1, x2); x++)
+            var scanTiles = task.Tiles;
+            if (scanTiles.Count == 0 && TryParseTile(task.ChestTile, out var c1) && TryParseTile(task.ItemFilter, out var c2))
             {
-                var t = new Vector2(x, y);
+                int x1 = (int)c1.X, y1 = (int)c1.Y, x2 = (int)c2.X, y2 = (int)c2.Y;
+                int left = Math.Min(x1, x2), right = Math.Max(x1, x2);
+                int top = Math.Min(y1, y2), bottom = Math.Max(y1, y2);
+                for (int y = top; y <= bottom && scanTiles.Count < WorkLimits.MaxTiles; y++)
+                    for (int x = left; x <= right && scanTiles.Count < WorkLimits.MaxTiles; x++)
+                        scanTiles.Add(new Vector2(x, y));
+            }
+            if (scanTiles.Count == 0) { task.LastResult = "provide area or tiles to scan"; return; }
+
+            int minX = int.MaxValue, minY = int.MaxValue, maxX = int.MinValue, maxY = int.MinValue;
+            var debrisByTile = new Dictionary<Vector2, List<string>>();
+            foreach (var debris in location.debris.ToList())
+            {
+                if (debris == null) continue;
+                string label = debris.item?.Name ?? debris.itemId.Value ?? debris.debrisType.Value.ToString();
+                foreach (var chunk in debris.Chunks)
+                {
+                    var pos = chunk.position.Value;
+                    var key = new Vector2((int)(pos.X / 64f), (int)(pos.Y / 64f));
+                    if (!debrisByTile.TryGetValue(key, out var names))
+                        debrisByTile[key] = names = new List<string>();
+                    if (!names.Contains(label)) names.Add(label);
+                }
+            }
+
+            foreach (var t in scanTiles.Distinct().Take(WorkLimits.MaxTiles))
+            {
+                int x = (int)t.X, y = (int)t.Y;
+                minX = Math.Min(minX, x); minY = Math.Min(minY, y);
+                maxX = Math.Max(maxX, x); maxY = Math.Max(maxY, y);
                 string obj = null, terrain = null, crop = null;
                 if (location.objects.TryGetValue(t, out var o))
                     obj = o.Name;
@@ -340,12 +385,14 @@ namespace StardewMCPBridge
                         crop = d.crop.indexOfHarvest.Value
                             + (d.readyForHarvest() ? " (ready)" : $" (phase {d.crop.currentPhase.Value})");
                 }
-                if (obj == null && terrain == null) continue;
-                tiles.Add(new { x, y, obj, terrain, crop });
+                debrisByTile.TryGetValue(t, out var debrisNames);
+                if (obj == null && terrain == null && debrisNames == null) continue;
+                tiles.Add(new { x, y, obj, terrain, crop, debris = debrisNames });
             }
 
             task.LastResult = $"{tiles.Count} non-empty tile(s)";
-            task.Log.Add(new { region = $"{x1},{y1}..{x2},{y2}", tiles });
+            string region = $"{minX},{minY}..{maxX},{maxY}";
+            task.Log.Add(new { region, tiles });
 
             // Persist the scan so agents (and humans) can read it without a console.
             try
@@ -353,13 +400,15 @@ namespace StardewMCPBridge
                 var logicDir = Path.GetDirectoryName(typeof(CompanionCareRunner).Assembly.Location);
                 var outDir = Path.GetFullPath(Path.Combine(logicDir, "..", ".."));
                 var path = Path.Combine(outDir, "scan_result.json");
-                File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(new
+                var tempPath = path + ".tmp";
+                File.WriteAllText(tempPath, System.Text.Json.JsonSerializer.Serialize(new
                 {
                     location = location.Name,
-                    region = $"{x1},{y1}..{x2},{y2}",
+                    region,
                     scannedAt = DateTime.UtcNow.ToString("o"),
                     tiles,
                 }, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+                File.Move(tempPath, path, true);
             }
             catch (Exception ex)
             {
@@ -441,14 +490,21 @@ namespace StardewMCPBridge
         public object Snapshot()
         {
             var t = this.Current;
-            if (t == null) return new { active = false };
+            return t == null ? this.lastSnapshot ?? (object)new { active = false } : this.MakeSnapshot(t, active: true);
+        }
+
+        private object MakeSnapshot(CareState t, bool active)
+        {
             return new
             {
-                active = true,
+                active,
+                status = active ? "running" : t.AbortReason == null ? "completed" : "aborted",
                 id = t.Id,
                 task = t.Task.ToString(),
+                location = t.LocationName,
                 building = t.BuildingName,
                 lastResult = t.LastResult,
+                aborted = t.AbortReason,
                 log = t.Log,
             };
         }

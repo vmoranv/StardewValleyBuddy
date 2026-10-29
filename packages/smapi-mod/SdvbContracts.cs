@@ -46,6 +46,9 @@ namespace StardewMCPBridge
     {
         public const int MaxTiles = 500;
         public const int MaxReroutes = 40;
+        public const int MaxTileSwings = 32;
+        public const int MaxJobDurationSeconds = 900;
+        public const float StaminaReserve = 10f;
     }
 
     public class WorkProgress
@@ -65,12 +68,18 @@ namespace StardewMCPBridge
         public string SeedId { get; set; }
         public string SellFilter { get; set; }
         public List<Vector2> Remaining { get; } = new List<Vector2>();
+        public List<Vector2> RequestedTiles { get; } = new List<Vector2>();
+        public List<Vector2> PendingAtStop { get; } = new List<Vector2>();
         public int TotalTiles { get; set; }
         public WorkProgress Progress { get; } = new WorkProgress();
 
         public string CurrentTile { get; set; }
+        public int CurrentTileSwings { get; set; }
         public string LastResult { get; set; }
         public string AbortReason { get; set; }
+        public string BlockedBy { get; set; }
+        public DateTime StartedAtUtc { get; set; }
+        public DateTime? FinishedAtUtc { get; set; }
         public int Reroutes { get; set; }
 
         public bool IsFinished => this.Remaining.Count == 0;
@@ -84,9 +93,11 @@ namespace StardewMCPBridge
     {
         public string Id { get; set; }
         public CareTask Task { get; set; }
+        public string LocationName { get; set; }
         public string BuildingName { get; set; }
         public string ChestTile { get; set; }
         public string ItemFilter { get; set; }
+        public List<Vector2> Tiles { get; } = new List<Vector2>();
         public List<object> Log { get; } = new List<object>();
         public string LastResult { get; set; }
         public string AbortReason { get; set; }
@@ -118,7 +129,8 @@ namespace StardewMCPBridge
     public interface ICompanionCare
     {
         CareState Current { get; }
-        CareState Start(CareTask task, string buildingName = null, string chestTile = null, string itemFilter = null);
+        CareState Start(CareTask task, string buildingName = null, string chestTile = null, string itemFilter = null,
+            string locationName = null, IEnumerable<Vector2> tiles = null);
         void Cancel(string reason);
         bool Tick();
         object Snapshot();

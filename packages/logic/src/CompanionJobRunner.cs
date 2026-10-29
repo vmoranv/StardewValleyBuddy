@@ -42,9 +42,9 @@ namespace StardewMCPBridge
 
         private readonly CompanionFarmer companion;
         private readonly IMonitor monitor;
+        private object lastSnapshot;
 
         private int ticksOnTile;
-        private long jobTick;
         /// <summary>Last recorded distance to the current tile, used to detect real progress.</summary>
         private float lastDistanceToTarget = float.MaxValue;
         private int repathCooldown;
@@ -87,6 +87,11 @@ namespace StardewMCPBridge
         public WorkTaskState Start(WorkTask task, string locationName, IEnumerable<Vector2> tiles,
             string seedId = null, string sellFilter = null)
         {
+            if (this.Current != null)
+                this.Cancel("replaced by new work");
+            this.walker.Cancel();
+            this.companion.Visual.controller = null;
+
             var state = new WorkTaskState
             {
                 Id = $"{task.ToString().ToLowerInvariant()}-{DateTime.UtcNow.Ticks}",
@@ -94,22 +99,26 @@ namespace StardewMCPBridge
                 LocationName = locationName,
                 SeedId = seedId,
                 SellFilter = sellFilter,
+                StartedAtUtc = DateTime.UtcNow,
             };
 
             var from = this.companion.Visual.Tile;
+            var requested = tiles?.Distinct().ToList() ?? new List<Vector2>();
             // Nearest first: reachable work happens up front, and tiles that turn out
             // to be walled off sink to the tail instead of stalling the whole job.
-            foreach (var tile in tiles.Distinct().OrderBy(t => Vector2.Distance(from, t)))
+            foreach (var tile in requested.OrderBy(t => Vector2.Distance(from, t)))
             {
                 if (state.Remaining.Count >= MaxTiles) break;
                 state.Remaining.Add(tile);
             }
+            state.RequestedTiles.AddRange(state.Remaining);
             state.TotalTiles = state.Remaining.Count;
 
             this.Current = state;
             this.lastProgress = DateTime.UtcNow;
             this.deferCount.Clear();
             this.tilesWalked = 0;
+            this.itemsCollected = 0;
             this.lastStepPosition = this.companion.Visual.Tile;
             this.spinCheckPosition = this.companion.Visual.Tile;
             this.spinCheckTime = DateTime.UtcNow;
@@ -120,10 +129,17 @@ namespace StardewMCPBridge
 
         public void Cancel(string reason)
         {
-            if (this.Current == null) return;
+            if (this.Current == null)
+            {
+                this.walker.Cancel();
+                this.companion.Visual.controller = null;
+                return;
+            }
             this.Current.AbortReason = reason;
+            this.Current.PendingAtStop.AddRange(this.Current.Remaining);
             this.Current.Remaining.Clear();
             this.monitor.Log($"{this.companion.Name}: {this.Current.Id} cancelled — {reason}", LogLevel.Info);
+            this.Finish();
         }
 
         /// <summary>Advance one tick. Returns true while the task is still running.</summary>
@@ -132,11 +148,14 @@ namespace StardewMCPBridge
             var job = this.Current;
             if (job == null) return false;
 
-            if (job.AbortReason != null || job.IsFinished)
+            if (job.AbortReason != null || (job.IsFinished && job.Task != WorkTask.Sell))
             {
                 this.Finish();
                 return false;
             }
+
+            this.CheckJobWatchdog(job);
+            if (this.Current == null) return false;
 
             // 1:50 AM hard curfew: abort whatever we're doing, follow the player home
             // and put the shadow to sleep — at 2600 the game force-passes everyone and
@@ -171,18 +190,31 @@ namespace StardewMCPBridge
                     return true;
 
                 // Walled in mid-route: whatever blocked us IS the work for a clearing
-                // task — queue that exact tile ahead of everything and go chop it.
+                // clear task only when it belongs to the requested region.
                 var hit = this.walker.BlockedTile;
                 this.walker.Cancel();
-                if (hit.HasValue && this.IsClearableAt(this.companion.Visual.currentLocation, hit.Value))
+                this.companion.Visual.controller = null;
+                if (hit.HasValue && job.Task == WorkTask.ClearArea
+                    && job.RequestedTiles.Contains(hit.Value)
+                    && job.Reroutes < WorkLimits.MaxReroutes
+                    && this.IsClearableAt(this.companion.Visual.currentLocation, hit.Value))
                 {
-                    this.companion.Visual.controller = null;
                     job.Remaining.Remove(hit.Value);
                     job.Remaining.Insert(0, hit.Value);
                     job.Reroutes++;
                     this.ResetTile();
                     this.monitor.Log($"{this.companion.Name}: route blocked at {hit} — clearing it first", LogLevel.Debug);
                     return true;
+                }
+                if (hit.HasValue)
+                {
+                    job.BlockedBy = job.Task == WorkTask.ClearArea
+                        && job.RequestedTiles.Contains(hit.Value)
+                        && this.IsClearableAt(this.companion.Visual.currentLocation, hit.Value)
+                        ? $"reroute limit reached at {(int)hit.Value.X},{(int)hit.Value.Y}"
+                        : $"{(int)hit.Value.X},{(int)hit.Value.Y}";
+                    this.FailCurrentTile(job, $"blocked by {job.BlockedBy}");
+                    return job.IsFinished ? this.EndOrContinue() : true;
                 }
                 // Otherwise fall through so re-pathfinding / stall logic takes over.
             }
@@ -220,7 +252,10 @@ namespace StardewMCPBridge
             if (this.repathCooldown > 0) this.repathCooldown--;
 
             var tile = job.Remaining[0];
-            job.CurrentTile = $"{tile.X},{tile.Y}";
+            var tileKey = $"{tile.X},{tile.Y}";
+            if (job.CurrentTile != tileKey)
+                job.CurrentTileSwings = 0;
+            job.CurrentTile = tileKey;
 
             var location = this.ResolveLocation(job.LocationName);
             if (location == null)
@@ -267,7 +302,8 @@ namespace StardewMCPBridge
                         }
 
                         this.deferCount.Remove(key);
-                        job.Progress.Failed.Add(new { x = tile.X, y = tile.Y, reason = "unreachable" });
+                        job.Progress.Failed.Add(new { x = tile.X, y = tile.Y, reason = job.BlockedBy == null ? "unreachable" : $"blocked by {job.BlockedBy}" });
+                        this.lastProgress = DateTime.UtcNow;
                         this.ResetTile();
                         this.monitor.Log($"{this.companion.Name}: {job.CurrentTile} unreachable after {attempts} deferrals", LogLevel.Debug);
                         return job.IsFinished ? this.EndOrContinue() : true;
@@ -293,6 +329,12 @@ namespace StardewMCPBridge
 
             var outcome = this.RunTile(location, tile, job);
 
+            if (job.AbortReason != null)
+            {
+                this.Finish();
+                return false;
+            }
+
             if (outcome == TileOutcome.Failed)
             {
                 // A tree takes several swings, so failure is usually just "not yet".
@@ -304,16 +346,16 @@ namespace StardewMCPBridge
                 job.Progress.Done.Add(new { x = tile.X, y = tile.Y, what = job.LastResult });
             else
                 job.Progress.Skipped.Add(new { x = tile.X, y = tile.Y, reason = job.LastResult });
+            this.lastProgress = DateTime.UtcNow;
 
             job.Remaining.RemoveAt(0);
             this.deferCount.Remove($"{tile.X},{tile.Y}");
             this.ResetTile();
 
             // EEVDF-lite replanning: deadline = euclidean distance − heading momentum
-            // (±2 tiles) − starvation aging (up to 5 tiles). Pure nearest-first
-            // oscillates — the just-cleared area behind us always wins — and euclidean
-            // distance lies across a stone field. After sorting, A*-probe the best few
-            // candidates and promote the nearest REACHABLE one to the head.
+            // (±2 tiles) − starvation aging (up to 5 tiles). Pathfind only when the
+            // selected tile is actually next; probing 15 candidates after every tile
+            // multiplied A* work without improving the route execution.
             if (job.Remaining.Count > 2)
             {
                 var here = this.companion.Visual.Tile;
@@ -335,22 +377,6 @@ namespace StardewMCPBridge
                     .Select(x => x.t)
                     .ToList();
 
-                var loc = this.companion.Visual.currentLocation;
-                if (loc != null)
-                {
-                    for (int i = 0; i < aged.Count && i < 15; i++)
-                    {
-                        var candidate = aged[i];
-                        if (candidate == here) break;
-                        var stand = FindWalkableAdjacent(loc, candidate) ?? candidate;
-                        if (PathIsReachable(loc, stand))
-                        {
-                            if (i > 0) { aged.RemoveAt(i); aged.Insert(0, candidate); }
-                            break;
-                        }
-                    }
-                }
-
                 job.Remaining.Clear();
                 job.Remaining.AddRange(aged);
             }
@@ -368,11 +394,13 @@ namespace StardewMCPBridge
         /// target first, then around the companion, preferring the shortest detour.
         /// Returns null when nothing clearable is standing around.
         /// </summary>
-        private Vector2? FindBlockingObstacle(GameLocation location, Vector2 target)
+        private Vector2? FindBlockingObstacle(GameLocation location, Vector2 target, WorkTaskState job)
         {
             var from = this.companion.Visual.Tile;
             Vector2? best = null;
+            Vector2? bestOutsideScope = null;
             float bestScore = float.MaxValue;
+            float bestOutsideScore = float.MaxValue;
             const int radius = 3;
 
             // Target-adjacent zone first (the wall), then companion surroundings.
@@ -385,32 +413,31 @@ namespace StardewMCPBridge
                     if (candidate == target) continue;
                     if (!this.IsClearableAt(location, candidate)) continue;
                     // Must be workable: we need to stand next to it.
-                    if (!FindWalkableAdjacent(location, candidate).HasValue) continue;
-                    // And standing next to it must be reachable from here right now —
-                    // an unreachable "blocker" is just another unreachable tile.
-                    var stand = FindWalkableAdjacent(location, candidate).Value;
-                    if (!PathIsReachable(location, stand)) continue;
+                    var stand = FindWalkableAdjacent(location, candidate);
+                    if (!stand.HasValue) continue;
 
                     // Score = distance from companion + distance from candidate onward to
                     // the target, so we chew through obstacles in the right direction.
                     float score = Vector2.Distance(from, candidate)
                                 + Vector2.Distance(candidate, target);
-                    if (score < bestScore)
+                    if (job.RequestedTiles.Contains(candidate))
                     {
-                        bestScore = score;
-                        best = candidate;
+                        if (score < bestScore)
+                        {
+                            bestScore = score;
+                            best = candidate;
+                        }
+                    }
+                    else if (score < bestOutsideScore)
+                    {
+                        bestOutsideScore = score;
+                        bestOutsideScope = candidate;
                     }
                 }
             }
+            if (!best.HasValue && bestOutsideScope.HasValue)
+                job.BlockedBy = $"{(int)bestOutsideScope.Value.X},{(int)bestOutsideScope.Value.Y} outside requested area";
             return best;
-        }
-
-        /// <summary>Probe A* without assigning the controller to the NPC.</summary>
-        private bool PathIsReachable(GameLocation location, Vector2 to)
-        {
-            var probe = new StardewValley.Pathfinding.PathFindController(
-                this.companion.Visual, location, new Point((int)to.X, (int)to.Y), 2);
-            return probe.pathToEndPoint != null && probe.pathToEndPoint.Count > 0;
         }
 
         /// <summary>
@@ -428,7 +455,7 @@ namespace StardewMCPBridge
         private bool IsClearableAt(GameLocation location, Vector2 tile)
         {
             if (location.terrainFeatures.TryGetValue(tile, out var feature)
-                && (feature is Tree || feature is FruitTree || feature is ResourceClump
+                && (feature is Tree || feature is ResourceClump
                     || feature is Grass || feature is Bush))
                 return true;
             if (location.objects.TryGetValue(tile, out var obj))
@@ -487,14 +514,26 @@ namespace StardewMCPBridge
             // re-queue each other forever. A blocker must (a) be reachable from where
             // we stand right now, (b) not already be queued, and (c) fit the reroute
             // budget. Anything else means the tile is genuinely out of reach.
-            if (job.Reroutes >= WorkLimits.MaxReroutes) return false;
+            if (job.Task != WorkTask.ClearArea) return false;
+            if (job.Reroutes >= WorkLimits.MaxReroutes)
+            {
+                job.BlockedBy = "reroute limit reached";
+                return false;
+            }
 
-            var blocker = this.FindBlockingObstacle(location, tile);
+            var blocker = this.FindBlockingObstacle(location, tile, job);
             if (!blocker.HasValue) return false;
-            if (job.Remaining.Contains(blocker.Value)) return false;
+            if (job.Remaining.Contains(blocker.Value))
+            {
+                job.Remaining.Remove(blocker.Value);
+                job.Remaining.Insert(0, blocker.Value);
+                job.Reroutes++;
+                this.ResetTile();
+                return true;
+            }
             if (!this.WalkTo(location, blocker.Value))
             {
-                // Can't reach the blocker either — it's not a real path breaker.
+                job.BlockedBy = $"{(int)blocker.Value.X},{(int)blocker.Value.Y}";
                 return false;
             }
 
@@ -515,6 +554,17 @@ namespace StardewMCPBridge
             this.lastDistanceToTarget = float.MaxValue;
             this.repathCooldown = 0;
             this.actionCooldown = 0;
+        }
+
+        private void FailCurrentTile(WorkTaskState job, string reason)
+        {
+            if (job.Remaining.Count == 0) return;
+            var tile = job.Remaining[0];
+            job.Progress.Failed.Add(new { x = (int)tile.X, y = (int)tile.Y, reason });
+            job.LastResult = reason;
+            job.Remaining.RemoveAt(0);
+            this.lastProgress = DateTime.UtcNow;
+            this.ResetTile();
         }
 
         /// <summary>Items picked up this job (telemetry).</summary>
@@ -565,6 +615,12 @@ namespace StardewMCPBridge
                 /// <summary>Abort when the job as a whole hasn't resolved a single tile recently.</summary>
         private void CheckJobWatchdog(WorkTaskState job)
         {
+            if (job.StartedAtUtc != default
+                && (DateTime.UtcNow - job.StartedAtUtc).TotalSeconds > WorkLimits.MaxJobDurationSeconds)
+            {
+                this.Cancel($"job exceeded {WorkLimits.MaxJobDurationSeconds / 60}-minute limit");
+                return;
+            }
             if ((DateTime.UtcNow - this.lastProgress).TotalSeconds <= 90) return;
             if (job.DoneCount + job.SkippedCount + job.FailedCount == 0) return; // still walking to first tile
             this.Cancel("job stalled — no tile resolved in 90s");
@@ -575,13 +631,18 @@ namespace StardewMCPBridge
             var job = this.Current;
             if (job == null) return;
 
+            job.FinishedAtUtc = DateTime.UtcNow;
+            this.walker.Cancel();
+            this.companion.Visual.controller = null;
+            this.refillTarget = null;
+
             this.monitor.Log(
                 $"{this.companion.Name}: {job.Id} finished — done {job.DoneCount}, skipped {job.SkippedCount}, failed {job.FailedCount}, swings {job.Progress.Swings}, refills {job.Progress.Refills}"
                 + (job.AbortReason != null ? $" (aborted: {job.AbortReason})" : ""),
                 LogLevel.Info);
 
+            this.lastSnapshot = this.BuildSnapshot(job, active: false);
             this.Current = null;
-            this.refillTarget = null;
             this.ResetTile();
         }
 
@@ -668,7 +729,7 @@ namespace StardewMCPBridge
             switch (job.Task)
             {
                 case WorkTask.ClearArea:
-                    if (hasTree || hasFruitTree) return TileAction.SwingAxe;
+                    if (hasTree) return TileAction.SwingAxe;
                     if (hasClump) return TileAction.SwingPickaxe;
                     if (hasBush) return TileAction.ShakeBush;
                     if (hasGrass) return TileAction.SwingScythe;
@@ -788,7 +849,15 @@ namespace StardewMCPBridge
             {
                 if (location.objects.TryGetValue(tile, out var obj))
                 {
+                    if (job.CurrentTileSwings >= WorkLimits.MaxTileSwings)
+                        return Skip(job, $"tile swing limit reached ({WorkLimits.MaxTileSwings})");
+                    if (shadow.Stamina <= WorkLimits.StaminaReserve)
+                    {
+                        job.AbortReason = "stamina reserve reached";
+                        return Fail(job, job.AbortReason);
+                    }
                     job.Progress.Swings++;
+                    job.CurrentTileSwings++;
                     shadow.FaceToward(tile);
                     try
                     {
@@ -810,7 +879,15 @@ namespace StardewMCPBridge
         private TileOutcome SwingOnce(GameLocation location, Vector2 tile, Tool tool, WorkTaskState job, string label)
         {
             var shadow = this.companion.Shadow;
+            if (job.CurrentTileSwings >= WorkLimits.MaxTileSwings)
+                return Skip(job, $"tile swing limit reached ({WorkLimits.MaxTileSwings})");
+            if (shadow.Stamina <= WorkLimits.StaminaReserve)
+            {
+                job.AbortReason = "stamina reserve reached";
+                return Fail(job, job.AbortReason);
+            }
             job.Progress.Swings++;
+            job.CurrentTileSwings++;
 
             this.companion.Visual.FacingDirection = this.FaceDirection(tile);
             shadow.FaceToward(tile);
@@ -1104,11 +1181,26 @@ namespace StardewMCPBridge
         public object Snapshot()
         {
             var job = this.Current;
-            if (job == null) return new { active = false };
+            if (job == null) return this.lastSnapshot ?? (object)new { active = false };
+            return this.BuildSnapshot(job, active: true);
+        }
 
+        private object BuildSnapshot(WorkTaskState job, bool active)
+        {
+            var remainingTiles = job.Remaining.Count > 0
+                ? job.Remaining.ToList()
+                : job.PendingAtStop.ToList();
+            object requestedRegion = job.RequestedTiles.Count == 0 ? null : new
+            {
+                x1 = (int)job.RequestedTiles.Min(t => t.X),
+                y1 = (int)job.RequestedTiles.Min(t => t.Y),
+                x2 = (int)job.RequestedTiles.Max(t => t.X),
+                y2 = (int)job.RequestedTiles.Max(t => t.Y),
+            };
             return new
             {
-                active = true,
+                active,
+                status = active ? "running" : job.AbortReason == null ? "completed" : "aborted",
                 id = job.Id,
                 task = job.Task.ToString(),
                 location = job.LocationName,
@@ -1116,9 +1208,16 @@ namespace StardewMCPBridge
                 done = job.DoneCount,
                 skipped = job.SkippedCount,
                 failed = job.FailedCount,
-                remaining = job.Remaining.Count,
+                requestedTiles = job.RequestedTiles.Count,
+                requestedRegion,
+                remaining = active ? job.Remaining.Count : remainingTiles.Count,
+                remainingTiles = active ? null : remainingTiles,
                 currentTile = job.CurrentTile,
                 lastResult = job.LastResult,
+                blockedBy = job.BlockedBy,
+                abortReason = job.AbortReason,
+                startedAt = job.StartedAtUtc,
+                finishedAt = job.FinishedAtUtc,
                 refilling = this.refillTarget.HasValue,
                 swings = job.Progress.Swings,
                 tilesWalked = Math.Round(this.tilesWalked, 1),

@@ -10,6 +10,7 @@ import {
     ok,
     type ToolResult,
 } from "./shared.js";
+import { AREA_SCHEMA, TILE_LIST_SCHEMA, normalizeCareArea, normalizeWorkArea } from "./area.js";
 
 // ============================
 // WORLD / ACTION TOOLS
@@ -156,7 +157,8 @@ export const workToolDefinitions = [
             "water (skips already-watered tiles, auto-refills from a nearby water source), " +
             "harvest (crops + bushes + fruit trees), sell (shipping bin; optional filter), " +
             "chop / mine (explicit overrides). " +
-            "Area: single tile (x,y), region (x1,y1,x2,y2) or tiles: [[x,y],...]; capped at 500 tiles. " +
+            "Area: inclusive bounds {x1,y1,x2,y2}, square center {center:{x,y},radius,shape:\"square\"}, " +
+            "or explicit tiles [[x,y],...]; capped at 500 tiles. Legacy flat x/y, x1/y1/x2/y2, and tiles remain supported. " +
             "Returns immediately — poll stardew_get_job for progress.",
         inputSchema: {
             type: "object",
@@ -164,10 +166,11 @@ export const workToolDefinitions = [
                 companion: { type: "string", enum: COMPANION_ENUM },
                 task: { type: "string", enum: ["clear_area", "plant", "water", "harvest", "sell", "chop", "mine"] },
                 location: { type: "string", description: "Map name. Defaults to the companion's current location." },
+                area: AREA_SCHEMA,
                 x: { type: "number" }, y: { type: "number" },
                 x1: { type: "number" }, y1: { type: "number" },
                 x2: { type: "number" }, y2: { type: "number" },
-                tiles: { type: "array", items: { type: "array", items: { type: "number" } }, description: "Explicit [[x,y],...] list." },
+                tiles: TILE_LIST_SCHEMA,
                 seed: { type: "string", description: "For task=plant: seed name in inventory, e.g. \"Parsnip Seeds\"." },
                 filter: { type: "string", enum: ["all", "crops", "forage", "fish", "minerals"], description: "For task=sell." },
             },
@@ -181,16 +184,19 @@ export const workToolDefinitions = [
             "tend_animals (pet every animal and collect eggs/milk/wool; optional `building` filter like \"Coop\"), " +
             "feed_animals (refill troughs/silos), " +
             "inspect_crops (read-only: daysToMature per crop, so you can plan instead of guessing), " +
-            "scan_tiles (read-only: every non-empty tile in a region — objects, terrain, crops; region via chest=\"x1,y1\" + filter=\"x2,y2\"), " +
+            "scan_tiles (read-only: every non-empty tile in a region — objects, terrain, crops; accepts location and the same area forms as stardew_work), " +
             "chest_deposit / chest_withdraw (need `chest` as \"x,y\" and an optional `filter` name substring).",
         inputSchema: {
             type: "object",
             properties: {
                 companion: { type: "string", enum: COMPANION_ENUM },
                 task: { type: "string", enum: ["tend_animals", "feed_animals", "inspect_crops", "scan_tiles", "chest_deposit", "chest_withdraw"] },
+                location: { type: "string", description: "Map name for tile scans. Defaults to the companion's current location." },
+                area: AREA_SCHEMA,
+                tiles: TILE_LIST_SCHEMA,
                 building: { type: "string", description: "For animal tasks: building type substring, e.g. \"Coop\"." },
-                chest: { type: "string", description: "For chest tasks: tile as \"x,y\" in the companion's current location." },
-                filter: { type: "string", description: "Optional item name substring." },
+                chest: { type: "string", description: "For chest tasks: tile as \"x,y\" in the companion's current location. Legacy scan_tiles range start is also accepted." },
+                filter: { type: "string", description: "Optional item name substring. Legacy scan_tiles range end is also accepted." },
             },
             required: ["companion", "task"],
         },
@@ -317,11 +323,10 @@ export function handleActionsTool(name: string, a: Record<string, any>): ToolRes
 
         case "stardew_work": {
             if (!a.companion || !a.task) return err("companion and task are required.");
-            const hasSingle = a.x != null && a.y != null;
-            const hasRegion = a.x1 != null && a.y1 != null && a.x2 != null && a.y2 != null;
-            const hasTiles = Array.isArray(a.tiles) && a.tiles.length > 0;
-            if (a.task !== "sell" && !hasSingle && !hasRegion && !hasTiles)
-                return err("Provide a tile (x,y), a region (x1,y1,x2,y2) or a tiles array.");
+            const area = normalizeWorkArea(a);
+            if (!area.ok) return err(area.error);
+            if (a.task !== "sell" && !area.fields)
+                return err("area is required; use inclusive bounds, a square center, or explicit tiles.");
             if (a.task === "plant" && !a.seed)
                 return err("task=plant requires a seed name.");
             return ok(sendAction({
@@ -331,9 +336,7 @@ export function handleActionsTool(name: string, a: Record<string, any>): ToolRes
                 ...(a.location ? { location: a.location } : {}),
                 ...(a.seed ? { seed: a.seed } : {}),
                 ...(a.filter ? { filter: a.filter } : {}),
-                ...(hasSingle ? { x: a.x, y: a.y } : {}),
-                ...(hasRegion ? { x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2 } : {}),
-                ...(hasTiles ? { tiles: a.tiles } : {}),
+                ...(area.fields ?? {}),
             }));
         }
 
@@ -341,13 +344,17 @@ export function handleActionsTool(name: string, a: Record<string, any>): ToolRes
             if (!a.companion || !a.task) return err("companion and task are required.");
             if ((a.task === "chest_deposit" || a.task === "chest_withdraw") && !a.chest)
                 return err("chest tasks require a chest tile as \"x,y\".");
+            const area = normalizeCareArea(a);
+            if (!area.ok) return err(area.error);
             return ok(sendAction({
                 actionType: "care",
                 companion: a.companion,
                 task: a.task,
+                ...(a.location ? { location: a.location } : {}),
                 ...(a.building ? { building: a.building } : {}),
                 ...(a.chest ? { chest: a.chest } : {}),
                 ...(a.filter ? { filter: a.filter } : {}),
+                ...(area.fields ?? {}),
             }));
         }
 

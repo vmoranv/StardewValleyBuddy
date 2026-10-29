@@ -498,6 +498,7 @@ namespace StardewMCPBridge
                         // drag everyone back to the player on the next AI tick.
                         foreach (var kvp in this.companions)
                         {
+                            this.StopCompanionTasks(kvp.Value, "companion warped");
                             kvp.Value.Companion.WarpTo(loc.GetString(), wx.GetInt32(), wy.GetInt32());
                             kvp.Value.Mode = CompanionMode.Idle;
                         }
@@ -611,6 +612,7 @@ namespace StardewMCPBridge
                     // --- Movement ---
                     case "move_to":
                     {
+                        this.StopCompanionTasks(ai, "replaced by direct movement");
                         int tx = root.GetProperty("x").GetInt32();
                         int ty = root.GetProperty("y").GetInt32();
                         var npc = companion.Visual;
@@ -641,6 +643,7 @@ namespace StardewMCPBridge
                         string loc = root.GetProperty("location").GetString();
                         int wx = root.GetProperty("x").GetInt32();
                         int wy = root.GetProperty("y").GetInt32();
+                        this.StopCompanionTasks(ai, "companion warped");
                         companion.WarpTo(loc, wx, wy);
                         // Follow mode pulls the companion back to the player on the next
                         // tick, which would undo the warp immediately if the player is in
@@ -740,7 +743,19 @@ namespace StardewMCPBridge
                             detail = "Provide a tile (x,y), a region (x1,y1,x2,y2) or a tiles array";
                             break;
                         }
+                        var workLocation = task == WorkTask.Sell ? null : Game1.getLocationFromName(locName);
+                        if (task != WorkTask.Sell && workLocation == null)
+                        {
+                            detail = $"Location '{locName}' was not found";
+                            break;
+                        }
+                        if (task != WorkTask.Sell && !TilesInsideMap(workLocation, tiles, out var workAreaError))
+                        {
+                            detail = workAreaError;
+                            break;
+                        }
 
+                        this.StopCompanionTasks(ai, "replaced by new work task");
                         var job = ai.Jobs.Start(task, locName, tiles, seedId, sellFilter);
                         success = true;
                         detail = $"{task} started over {job.TotalTiles} tile(s) in {locName}"
@@ -773,7 +788,33 @@ namespace StardewMCPBridge
                         string filter = root.TryGetProperty("filter", out var fEl) && fEl.ValueKind == System.Text.Json.JsonValueKind.String
                             ? fEl.GetString() : null;
 
-                        ai.Care.Start(careTask, building, chest, filter);
+                        string careLocation = root.TryGetProperty("location", out var careLocEl)
+                            && careLocEl.ValueKind == System.Text.Json.JsonValueKind.String
+                            ? careLocEl.GetString()
+                            : companion.Visual.currentLocation?.Name;
+                        var careTiles = ParseCareTiles(root, chest, filter);
+                        if (careTask == CareTask.ScanTiles && careTiles.Count == 0
+                            && (string.IsNullOrWhiteSpace(chest) || string.IsNullOrWhiteSpace(filter)))
+                        {
+                            detail = "scan_tiles requires an area or a tiles array";
+                            break;
+                        }
+                        var careGameLocation = careTask == CareTask.ScanTiles
+                            ? Game1.getLocationFromName(careLocation) : null;
+                        if (careTask == CareTask.ScanTiles && careGameLocation == null)
+                        {
+                            detail = $"Location '{careLocation}' was not found";
+                            break;
+                        }
+                        if (careTask == CareTask.ScanTiles
+                            && !TilesInsideMap(careGameLocation, careTiles, out var careAreaError))
+                        {
+                            detail = careAreaError;
+                            break;
+                        }
+
+                        this.StopCompanionTasks(ai, "replaced by new care task");
+                        ai.Care.Start(careTask, building, chest, filter, careLocation, careTiles);
                         success = true;
                         detail = $"Care task started: {careTask}";
                         break;
@@ -781,8 +822,7 @@ namespace StardewMCPBridge
 
                     case "cancel_job":
                     {
-                        ai.Jobs.Cancel("cancelled by agent");
-                        ai.Care.Cancel("cancelled by agent");
+                        this.StopCompanionTasks(ai, "cancelled by agent");
                         success = true;
                         detail = "Job cancelled";
                         break;
@@ -1031,6 +1071,64 @@ namespace StardewMCPBridge
         // GLOBAL HELPERS
         // ======================
 
+        private void StopCompanionTasks(CompanionAI ai, string reason)
+        {
+            ai.Jobs.Cancel(reason);
+            ai.Care.Cancel(reason);
+            ai.Walker.Cancel();
+            ai.Companion.Visual.controller = null;
+        }
+
+        private static List<Vector2> ParseCareTiles(System.Text.Json.JsonElement root, string chest, string filter)
+        {
+            var tiles = ParseTiles(root);
+            if (tiles.Count > 0 || !TryParseTilePair(chest, out var start) || !TryParseTilePair(filter, out var end))
+                return tiles;
+
+            int left = Math.Min((int)start.X, (int)end.X);
+            int right = Math.Max((int)start.X, (int)end.X);
+            int top = Math.Min((int)start.Y, (int)end.Y);
+            int bottom = Math.Max((int)start.Y, (int)end.Y);
+            for (int y = top; y <= bottom && tiles.Count <= WorkLimits.MaxTiles; y++)
+                for (int x = left; x <= right && tiles.Count <= WorkLimits.MaxTiles; x++)
+                    tiles.Add(new Vector2(x, y));
+            return tiles;
+        }
+
+        private static bool TryParseTilePair(string value, out Vector2 tile)
+        {
+            tile = Vector2.Zero;
+            var parts = value?.Split(',');
+            if (parts == null || parts.Length != 2
+                || !int.TryParse(parts[0], out int x) || !int.TryParse(parts[1], out int y))
+                return false;
+            tile = new Vector2(x, y);
+            return true;
+        }
+
+        private static bool TilesInsideMap(GameLocation location, IEnumerable<Vector2> tiles, out string error)
+        {
+            var layer = location?.map?.GetLayer("Back");
+            if (layer == null)
+            {
+                error = $"Location '{location?.Name}' has no Back map layer";
+                return false;
+            }
+
+            foreach (var tile in tiles)
+            {
+                int x = (int)tile.X, y = (int)tile.Y;
+                if (x < 0 || y < 0 || x >= layer.LayerWidth || y >= layer.LayerHeight)
+                {
+                    error = $"Tile ({x},{y}) is outside {location.Name} map bounds (0..{layer.LayerWidth - 1}, 0..{layer.LayerHeight - 1})";
+                    return false;
+                }
+            }
+
+            error = null;
+            return true;
+        }
+
         /// <summary>
         /// Tiles from a single (x,y), a region (x1,y1,x2,y2) or an explicit tiles array.
         /// Regions are normalised so the caller doesn't have to order the corners.
@@ -1043,6 +1141,7 @@ namespace StardewMCPBridge
             {
                 foreach (var entry in tilesEl.EnumerateArray())
                 {
+                    if (tiles.Count > WorkLimits.MaxTiles) break;
                     if (entry.ValueKind == System.Text.Json.JsonValueKind.Array && entry.GetArrayLength() >= 2)
                     {
                         var parts = entry.EnumerateArray().ToArray();
@@ -1064,8 +1163,8 @@ namespace StardewMCPBridge
                 int right = Math.Max(x1.GetInt32(), x2.GetInt32());
                 int top = Math.Min(y1.GetInt32(), y2.GetInt32());
                 int bottom = Math.Max(y1.GetInt32(), y2.GetInt32());
-                for (int y = top; y <= bottom; y++)
-                    for (int x = left; x <= right; x++)
+                for (int y = top; y <= bottom && tiles.Count <= WorkLimits.MaxTiles; y++)
+                    for (int x = left; x <= right && tiles.Count <= WorkLimits.MaxTiles; x++)
                         tiles.Add(new Vector2(x, y));
                 return tiles;
             }

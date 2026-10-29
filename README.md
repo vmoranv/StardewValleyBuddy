@@ -142,13 +142,13 @@ pnpm smoke   # 应输出 smoke: tools/list = 31
 
 | 工具 | 说明 |
 |------|------|
-| `stardew_work` | **意图级任务**。`task` 可选：`clear_area`（树/石/杂草/灌木一律清掉）、`plant`（翻土→播种→浇水）、`water`（跳过已浇水，水壶空了自动去打水）、`harvest`（作物/灌木/果树）、`sell`（投入出货箱，可加 `filter`）、`chop` / `mine`（显式覆盖）。范围用 `(x,y)`、`(x1,y1,x2,y2)` 或 `tiles:[[x,y],...]`，上限 500 格 |
-| `stardew_get_job` | 查询当前作业进度：已完成/跳过/失败数量、当前格、跳过原因 |
+| `stardew_work` | **意图级任务**。`task` 可选：`clear_area`（清普通树、石、杂草、灌木；果树默认保护）、`plant`（翻土→播种→浇水）、`water`（跳过已浇水，水壶空了自动去打水）、`harvest`（作物/灌木/果树）、`sell`（投入出货箱，可加 `filter`）、`chop` / `mine`（显式覆盖）。可传 `location` 和 `area`：闭区间 bounds、方形 `center/radius` 或显式 tiles；上限 500 格，旧坐标参数仍兼容 |
+| `stardew_get_job` | 查询当前作业进度和最近终态摘要：已完成/跳过/失败数量、当前格、阻挡原因与剩余格坐标 |
 | `stardew_cancel_job` | 取消当前作业 |
 | `stardew_talk_to` | 与 NPC 对话：先走到相邻格，再返回对话内容（不在范围内时会提示再调用一次） |
-| `stardew_care` | 建筑/动物/背包任务：`tend_animals`（抚摸+收蛋奶羊毛）、`feed_animals`（补饲料）、`inspect_crops`（只读：每株作物还有几天成熟）、`chest_deposit` / `chest_withdraw`（箱子存取） |
+| `stardew_care` | 建筑/动物/背包任务：`tend_animals`（抚摸+收蛋奶羊毛）、`feed_animals`（补饲料）、`inspect_crops`（只读：每株作物还有几天成熟）、`scan_tiles`（按 `location` 和共享 `area` 扫描对象、地形、作物和掉落物）、`chest_deposit` / `chest_withdraw`（箱子存取） |
 
-**为什么是「意图」而不是「操作」**：AI 看不见地块，让它判断"这格是石头还是灌木"必然出错。`stardew_work` 只接收意图（清地、种地、浇水、收获、卖货），**逐格决策由 mod 完成**——树换斧头、石头换镐、杂草换镰刀、已浇水的跳过、水壶空了自动寻路打水。AI 不需要知道任何底层细节。
+**为什么是「意图」而不是「操作」**：AI 看不见地块，让它判断"这格是石头还是灌木"必然出错。`stardew_work` 只接收意图（清地、种地、浇水、收获、卖货），**逐格决策由 mod 完成**——树换斧头、石头换镐、杂草换镰刀、已浇水的跳过、水壶空了自动寻路打水。清障只在请求范围内进行，超范围阻挡会报告坐标。AI 不需要知道任何底层细节。
 
 每次操作只经过一次 MCP 调用；一棵树要挥 5–10 下，全在游戏主循环内完成。
 
@@ -157,6 +157,10 @@ pnpm smoke   # 应输出 smoke: tools/list = 31
 - **单机 shadow farmer 路线**：伙伴由 NPC + 隐藏 shadow Farmer 实现，且 shadow Farmer 刻意**不**注册进 `Game1.otherFarmers` —— 该表是网络同步表，非 net 支撑的 Farmer 会导致 `Multiplayer.updateRoots()` 抛 NPE。整条机制只在单机存档下验证过。
 - **无多人支持验证**：未在联机存档中做过任何测试，多人支持不在当前路线图内。
 - **伙伴数量固定**：枚举限定 `Companion1` / `Companion2`，新增伙伴需同时扩展 mod 与工具枚举。
+
+## 开发复盘
+
+- [清理任务、寻路与除障提效复盘](docs/agent-workflow-efficiency-review.md)
 
 ## License
 
