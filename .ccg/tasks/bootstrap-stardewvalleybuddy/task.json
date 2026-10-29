@@ -1,0 +1,12 @@
+{
+  "id": "bootstrap-stardewvalleybuddy",
+  "title": "初始化 StardewValleyBuddy repo 骨架，迁移 StardewValley-MCP 关键代码并审计 API 覆盖",
+  "status": "in_progress",
+  "strategy": "full-collaborate",
+  "currentPhase": "5-optimization",
+  "nextAction": "Ralph Loop Round 1: Claude 自查审查（子代理/外部模型均不可用）",
+  "gate": null,
+  "branch": "master",
+  "scope": "bootstrap-stardewvalleybuddy",
+  "createdAt": "2026-10-28T15:22:53+08:00"
+}

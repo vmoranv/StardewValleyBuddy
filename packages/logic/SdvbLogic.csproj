@@ -1,0 +1,55 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>SdvbLogic</AssemblyName>
+    <RootNamespace>SdvbLogic</RootNamespace>
+    <Version>0.4.0</Version>
+    <TargetFramework>net6.0</TargetFramework>
+    <Platforms>AnyCPU</Platforms>
+    <Nullable>disable</Nullable>
+    <!--
+      Hot-reloadable logic assembly. Built straight into the mod's staging folder;
+      the shell loads (and re-loads via `svb_reload`) it from there. Never referenced
+      by the shell at compile time — the shell discovers it through ISdvbLogicEntry.
+    -->
+    <GamePath Condition="'$(GamePath)' == ''">$(SMAPI_PATH)</GamePath>
+    <GamePath Condition="'$(GamePath)' == ''">$(GAME_PATH)</GamePath>
+    <ShellDll>$(MSBuildThisFileDirectory)..\smapi-mod\bin\Debug\net6.0\StardewValleyBuddy.dll</ShellDll>
+    <OutDir>$(GamePath)\Mods\StardewValleyBuddy\staging\</OutDir>
+    <EnableDefaultDeploy>false</EnableDefaultDeploy>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="StardewModdingAPI">
+      <HintPath>$(GamePath)\StardewModdingAPI.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="StardewValley">
+      <HintPath>$(GamePath)\Stardew Valley.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="StardewValley.GameData">
+      <HintPath>$(GamePath)\StardewValley.GameData.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="MonoGame.Framework">
+      <HintPath>$(GamePath)\MonoGame.Framework.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="xTile">
+      <HintPath>$(GamePath)\xTile.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Shell contracts (interfaces + state types). Private=false: loaded once by SMAPI. -->
+    <Reference Include="StardewValleyBuddy">
+      <HintPath>$(ShellDll)</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="CheckShell" BeforeTargets="Build">
+    <Error Condition="!Exists('$(ShellDll)')"
+           Text="Shell assembly not found at $(ShellDll). Build packages/smapi-mod first." />
+  </Target>
+
+</Project>

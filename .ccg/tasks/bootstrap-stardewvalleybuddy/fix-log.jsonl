@@ -1,0 +1,3 @@
+{"round":1,"critical":2,"warning":4,"info":3,"ts":"2026-10-28T17:07:58+08:00","fixed":["C1 bridge.ts default path","C2 AGENTS.md deploy doc"]}
+{"round":2,"critical":0,"warning":0,"info":1,"ts":"2026-10-28T17:13:17+08:00","fixed":["W3 companion state persistence + restore on SaveLoaded"],"files":["CompanionState.cs (new)","BotManager.cs","ModEntry.cs"]}
+{"round":3,"critical":3,"warning":0,"info":0,"ts":"2026-10-28T17:20:55+08:00","fixed":["C3 mod build config restored","C4 manual refs replaced","C5 ConsoleCommands.Add"]}

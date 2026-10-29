@@ -1,0 +1,21 @@
+# Node
+node_modules/
+
+# 构建产物
+build/
+
+# .NET 构建产物
+bin/
+obj/
+
+# 文件桥运行时产物（smapi-mod 与 mcp-server 运行时读写，不入库）
+bridge_data.json
+actions/
+
+# IDE / 系统
+*.user
+.DS_Store
+Thumbs.db
+
+# Local API decompilation and test scratch data
+.cache/

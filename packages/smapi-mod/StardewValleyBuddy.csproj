@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>StardewValleyBuddy</AssemblyName>
+    <!-- Namespace kept as StardewMCPBridge after migration from StardewValley-MCP (GPLv3). -->
+    <RootNamespace>StardewMCPBridge</RootNamespace>
+    <Version>0.4.0</Version>
+    <TargetFramework>net6.0</TargetFramework>
+    <Platforms>AnyCPU</Platforms>
+    <!--
+      Stardew Valley install root. ModBuildConfig (below) auto-detects the game
+      assemblies and deploys the built mod into the SMAPI Mods folder.
+      Resolution order:
+        1. msbuild -p:GamePath="C:\...\Stardew Valley"
+        2. SMAPI_PATH environment variable
+        3. GAME_PATH environment variable
+    -->
+    <GamePath Condition="'$(GamePath)' == ''">$(SMAPI_PATH)</GamePath>
+    <GamePath Condition="'$(GamePath)' == ''">$(GAME_PATH)</GamePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      ModBuildConfig pulls in the correct game/SMAPI assembly set for the target
+      game version. Hand-listing them is not viable: 1.6 splits types such as
+      StardewValley.GameData.Characters.CharacterData into assemblies that a
+      manual reference list misses (surfaced as CS0234). It also deploys the
+      built mod into Mods/ automatically.
+    -->
+    <PackageReference Include="Pathoschild.Stardew.ModBuildConfig" Version="4.1.1" />
+  </ItemGroup>
+
+  <!-- Fail fast with a clear message instead of a wall of CS0246 errors. -->
+  <Target Name="CheckGamePath" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="'$(GamePath)' == ''" Text="GamePath is not set. Build with -p:GamePath=&quot;C:\path\to\Stardew Valley&quot;, or set the GAME_PATH / SMAPI_PATH environment variable." />
+    <Error Condition="!Exists('$(GamePath)\Stardew Valley.dll')" Text="Stardew Valley.dll not found under '$(GamePath)'. Point GamePath at the Stardew Valley install root." />
+  </Target>
+
+</Project>
