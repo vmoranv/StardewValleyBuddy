@@ -22,3 +22,7 @@ Thumbs.db
 
 # CCG 会话/任务簿记（运行时状态与任务文档均不入库）
 .ccg/
+
+# 本地工具与 AI 部署文档（不入库）
+tools/
+AGENTS.md
