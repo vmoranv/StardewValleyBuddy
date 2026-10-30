@@ -771,6 +771,13 @@ namespace StardewMCPBridge
         {
             if (this.resumeTiles == null || this.resumeTiles.Count == 0) return false;
             if (now < this.resumeAtUtc) return false;
+            // Already inside tonight's curfew window: don't relight the stove —
+            // NewDay re-arms the timer in the morning (bedtimeHandled stays armed).
+            if (Game1.timeOfDay + this.TravelHomeMinutes(null) >= 2550)
+            {
+                this.resumeAtUtc = DateTime.MaxValue;
+                return false;
+            }
             var shadowStamina = this.companion.Shadow.Stamina;
             if (shadowStamina <= WorkLimits.StaminaReserve)
             {
