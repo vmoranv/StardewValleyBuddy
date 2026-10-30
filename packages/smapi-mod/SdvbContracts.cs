@@ -146,6 +146,8 @@ namespace StardewMCPBridge
         void Cancel(string reason);
         bool Tick();
         object Snapshot();
+        /// <summary>Pin the auto-deposit chest (tile "x,y" on the Farm); (-1,-1) clears the pin.</summary>
+        void SetDepositChest(int x, int y);
     }
 
     /// <summary>Implemented by SdvbLogic.dll; the shell calls this after every reload.</summary>

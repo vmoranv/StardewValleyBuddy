@@ -178,6 +178,22 @@ export const workToolDefinitions = [
         },
     },
     {
+        name: "stardew_set_deposit_chest",
+        description:
+            "Pin the companion's auto-deposit chest: sweep loot goes into this chest first, " +
+            "overflow moves to the next nearest chest, and a new chest is placed automatically " +
+            "when every chest is full. Pass clear:true to unpin and fall back to nearest-first.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                companion: { type: "string", enum: COMPANION_ENUM },
+                chest: { type: "string", description: 'Chest tile as "x,y" on the Farm (see depositChests in stardew_get_job).' },
+                clear: { type: "boolean", description: "Unpin and return to nearest-first queue." },
+            },
+            required: ["companion"],
+        },
+    },
+    {
         name: "stardew_care",
         description:
             "Building/animal/inventory tasks. tasks: " +
@@ -238,6 +254,17 @@ export const workToolDefinitions = [
 
 export function handleActionsTool(name: string, a: Record<string, any>): ToolResult | undefined {
     switch (name) {
+        case "stardew_set_deposit_chest": {
+            if (a.clear) {
+                return ok(sendAction({ actionType: "set_chest", companion: a.companion, x: -1, y: -1 }));
+            }
+            const chest = typeof a.chest === "string" ? a.chest.split(",").map((v: string) => parseInt(v.trim(), 10)) : [];
+            if (chest.length !== 2 || !Number.isInteger(chest[0]) || !Number.isInteger(chest[1])) {
+                return err('chest must be "x,y" (or pass clear:true to unpin)');
+            }
+            return ok(sendAction({ actionType: "set_chest", companion: a.companion, x: chest[0], y: chest[1] }));
+        }
+
         case "stardew_farm":
             return ok(sendAction({ actionType: "farm" }));
 

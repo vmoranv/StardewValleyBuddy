@@ -701,6 +701,24 @@ namespace StardewMCPBridge
             return this.travelHomeMinutes;
         }
 
+        /// <summary>User-pinned deposit chest (Farm tile); the queue starts here when set.</summary>
+        private Vector2? preferredChest;
+
+        /// <inheritdoc/>
+        public void SetDepositChest(int x, int y)
+        {
+            if (x < 0 || y < 0)
+            {
+                this.preferredChest = null;
+                this.chestQueueScannedUtc = DateTime.MinValue;
+                this.monitor.Log($"{this.companion.Name}: deposit chest pin cleared (nearest-first queue)", LogLevel.Info);
+                return;
+            }
+            this.preferredChest = new Vector2(x, y);
+            this.chestQueueScannedUtc = DateTime.MinValue;
+            this.monitor.Log($"{this.companion.Name}: deposit chest pinned to ({x},{y})", LogLevel.Info);
+        }
+
         /// <summary>Refresh the nearest-first chest queue (player chests on the farm).</summary>
         private List<StardewValley.Objects.Chest> GetChestQueue()
         {
@@ -715,6 +733,16 @@ namespace StardewMCPBridge
                     .Where(c => c.playerChest.Value)
                     .OrderBy(c => Vector2.Distance(c.TileLocation, origin))
                     .ToList();
+            // A pinned chest (stardew_set_deposit_chest) always leads the queue.
+            if (this.preferredChest != null)
+            {
+                var pinned = this.chestQueue.FirstOrDefault(c => c.TileLocation == this.preferredChest.Value);
+                if (pinned != null)
+                {
+                    this.chestQueue.Remove(pinned);
+                    this.chestQueue.Insert(0, pinned);
+                }
+            }
             return this.chestQueue;
         }
 
@@ -2145,6 +2173,9 @@ namespace StardewMCPBridge
                 refilling = this.refillTarget.HasValue,
                 napping = this.napUntilUtc != null,
                 depositChests = this.ChestQueueSnapshot(),
+                depositChestPreferred = this.preferredChest != null
+                    ? $"{(int)this.preferredChest.Value.X},{(int)this.preferredChest.Value.Y}"
+                    : null,
                 swings = job.Progress.Swings,
                 tilesWalked = Math.Round(this.tilesWalked, 1),
                 itemsCollected = job.ItemsCollected,

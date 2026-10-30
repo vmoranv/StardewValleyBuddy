@@ -709,6 +709,17 @@ namespace StardewMCPBridge
                     }
 
                     // --- Long-running tile job (chop / mine / clear / hoe / water / harvest) ---
+                    case "set_chest":
+                    {
+                        // Pin the auto-deposit chest for sweep loot; -1 clears the pin.
+                        int cx = root.TryGetProperty("x", out var cxE) && cxE.ValueKind == System.Text.Json.JsonValueKind.Number ? cxE.GetInt32() : -1;
+                        int cy = root.TryGetProperty("y", out var cyE) && cyE.ValueKind == System.Text.Json.JsonValueKind.Number ? cyE.GetInt32() : -1;
+                        ai.Jobs.SetDepositChest(cx, cy);
+                        success = true;
+                        detail = cx < 0 ? "deposit chest pin cleared" : $"deposit chest pinned to ({cx},{cy})";
+                        break;
+                    }
+
                     case "work":
                     {
                         // The agent states an intent; the runner decides per tile what

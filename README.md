@@ -91,14 +91,14 @@ claude mcp add stardew \
 ### 5. 验证
 
 ```bash
-pnpm smoke   # 应输出 smoke: tools/list = 31
+pnpm smoke   # 应输出 smoke: tools/list = 32
 ```
 
 启动游戏（经 SMAPI）→ 读档 → `stardew_spawn` 生成伙伴 → `stardew_set_mode` 选择模式。
 
 > **伙伴状态自动保存**：伙伴的存活状态、模式（follow/farm/mine/fish/idle/player）与自动战斗开关会写入存档目录下的 `companion_state.json`（SMAPI Data API），并在保存、切换模式、返回标题时更新。下次读档时自动重建，无需重新 spawn。
 
-## MCP 工具（31 个）
+## MCP 工具（32 个）
 
 ### 全局工具（14 个）—— 模式化控制
 
@@ -142,7 +142,8 @@ pnpm smoke   # 应输出 smoke: tools/list = 31
 
 | 工具 | 说明 |
 |------|------|
-| `stardew_work` | **意图级任务**。`task` 可选：`clear_area`（清普通树、石、杂草、灌木；果树默认保护）、`plant`（翻土→播种→浇水）、`water`（跳过已浇水，水壶空了自动去打水）、`harvest`（作物/灌木/果树）、`sell`（投入出货箱，可加 `filter`）、`chop` / `mine`（显式覆盖）。可传 `location` 和 `area`：闭区间 bounds、方形 `center/radius` 或显式 tiles；上限 500 格，旧坐标参数仍兼容 |
+| `stardew_work` | **意图级任务**。`task` 可选：`clear_area`（清普通树、石、杂草、灌木；果树默认保护；清理期间及完成后 10 秒内拾取附近掉落，`itemsCollected` 记录数量）、`plant`（翻土→播种→浇水）、`water`（跳过已浇水，水壶空了自动去打水）、`harvest`（作物/灌木/果树）、`sell`（投入出货箱，可加 `filter`）、`chop` / `mine`（显式覆盖）。可传 `location` 和 `area`：闭区间 bounds、方形 `center/radius` 或显式 tiles；上限 500 格，旧坐标参数仍兼容 |
+| `stardew_set_deposit_chest` | 指定清扫掉落物自动入库的目标箱子（`chest:"x,y"`，坐标见 `stardew_get_job` 的 `depositChests`）；溢出自动流向下一个最近箱子，全满自动补箱；`clear:true` 解除指定、回到最近优先队列 |
 | `stardew_get_job` | 查询当前作业进度和最近终态摘要：已完成/跳过/失败数量、当前格、阻挡原因与剩余格坐标 |
 | `stardew_cancel_job` | 取消当前作业 |
 | `stardew_talk_to` | 与 NPC 对话：先走到相邻格，再返回对话内容（不在范围内时会提示再调用一次） |
