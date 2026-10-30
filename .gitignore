@@ -19,3 +19,6 @@ Thumbs.db
 
 # Local API decompilation and test scratch data
 .cache/
+
+# CCG 会话/任务簿记（运行时状态与任务文档均不入库）
+.ccg/

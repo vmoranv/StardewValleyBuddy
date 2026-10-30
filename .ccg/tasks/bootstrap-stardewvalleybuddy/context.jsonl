@@ -1,5 +1,0 @@
-{"_example": "Fill with {\"file\": \"path\", \"reason\": \"why\"}. Seed rows are skipped."}
-{"file": "D:/coding/StardewValley-MCP/smapi-mod/BotManager.cs", "reason": "核心桥接逻辑，API 覆盖审计的主要对象"}
-{"file": "D:/coding/StardewValley-MCP/mcp-server/src/index.ts", "reason": "MCP server 26 个工具定义，迁移对象"}
-{"file": "D:/coding/StardewValley-MCP/smapi-mod/ModEntry.cs", "reason": "Mod 入口与事件订阅，事件覆盖审计对象"}
-{"file": ".ccg/tasks/bootstrap-stardewvalleybuddy/requirements.md", "reason": "需求与验收标准"}
