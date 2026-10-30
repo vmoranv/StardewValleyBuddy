@@ -236,7 +236,7 @@ namespace StardewMCPBridge
                 try
                 {
                     var inventoryItem = obj.getOne();
-                    if (shadow.addItemToInventoryBool(inventoryItem, false))
+                    if (CompanionInventory.TryAdd(shadow, inventoryItem))
                     {
                         location.objects.Remove(pair.Key);
                         collected++;
@@ -460,7 +460,7 @@ namespace StardewMCPBridge
                 {
                     if (entry is not SObject item) continue;
                     if (!Matches(item, task.ItemFilter)) continue;
-                    if (!shadow.addItemToInventoryBool(item, false)) continue;
+                    if (!CompanionInventory.TryAdd(shadow, item)) continue;
                     contents.Remove(item);
                     moved++;
                 }

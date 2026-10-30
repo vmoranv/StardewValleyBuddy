@@ -101,6 +101,11 @@ namespace StardewMCPBridge
             // Direct-control walking outranks everything: the agent said "go there".
             if (this.Walker.Active)
             {
+                // Continue the post-clear pickup window while a direct move is active,
+                // but don't advance an actual work job alongside the direct controller.
+                if (this.Jobs.Current == null)
+                    this.Jobs.Tick();
+
                 this.Walker.Tick(this.npc.currentLocation, Game1.currentGameTime);
                 return;
             }
@@ -109,13 +114,15 @@ namespace StardewMCPBridge
             // mode change would silently strand half a field of crops.
             if (this.Care.Current != null)
             {
-                if (this.Care.Tick()) return;
+                if (this.Care.Tick())
+                {
+                    if (this.Jobs.Current == null)
+                        this.Jobs.Tick();
+                    return;
+                }
             }
 
-            if (this.Jobs.Current != null)
-            {
-                if (this.Jobs.Tick()) return;
-            }
+            if (this.Jobs.Tick()) return;
 
             // Combat outranks everything else: staying alive beats harvesting. The state
             // machine returns true only while it is actually engaging or retreating.

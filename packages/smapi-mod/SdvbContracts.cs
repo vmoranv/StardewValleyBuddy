@@ -71,6 +71,7 @@ namespace StardewMCPBridge
         public List<Vector2> RequestedTiles { get; } = new List<Vector2>();
         public List<Vector2> PendingAtStop { get; } = new List<Vector2>();
         public int TotalTiles { get; set; }
+        public int ItemsCollected { get; set; }
         public WorkProgress Progress { get; } = new WorkProgress();
 
         public string CurrentTile { get; set; }
